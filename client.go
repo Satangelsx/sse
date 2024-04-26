@@ -32,6 +32,12 @@ func ClientMaxBufferSize(s int) func(c *Client) {
 	}
 }
 
+func WithRequestFactory(factory RequestCreateFactory) func(c *Client) {
+	return func(c *Client) {
+		c.RequestFactory = factory
+	}
+}
+
 // ConnCallback defines a function to be called on a particular connection event
 type ConnCallback func(c *Client)
 
@@ -55,16 +61,18 @@ type Client struct {
 	mu                sync.Mutex
 	EncodingBase64    bool
 	Connected         bool
+	RequestFactory    RequestCreateFactory
 }
 
 // NewClient creates a new client
 func NewClient(url string, opts ...func(c *Client)) *Client {
 	c := &Client{
-		URL:           url,
-		Connection:    &http.Client{},
-		Headers:       make(map[string]string),
-		subscribed:    make(map[chan *Event]chan struct{}),
-		maxBufferSize: 1 << 16,
+		URL:            url,
+		Connection:     &http.Client{},
+		Headers:        make(map[string]string),
+		subscribed:     make(map[chan *Event]chan struct{}),
+		maxBufferSize:  1 << 16,
+		RequestFactory: DefaultRequestFactory,
 	}
 
 	for _, opt := range opts {
@@ -289,22 +297,10 @@ func (c *Client) OnConnect(fn ConnCallback) {
 }
 
 func (c *Client) request(ctx context.Context, stream string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", c.URL, nil)
+	req, err := c.RequestFactory(ctx, stream, c)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-
-	// Setup request, specify stream to connect to
-	if stream != "" {
-		query := req.URL.Query()
-		query.Add("stream", stream)
-		req.URL.RawQuery = query.Encode()
-	}
-
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Connection", "keep-alive")
 
 	lastID, exists := c.LastEventID.Load().([]byte)
 	if exists && lastID != nil {
